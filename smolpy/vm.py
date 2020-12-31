@@ -178,6 +178,29 @@ class VM:
             raise NameError(f"global name {name} is not defined")
         self.push(val)
 
+    def do_LOAD_ATTR(self, arg):
+        attr = self.func.co_names[arg]
+        obj = self.pop()
+        self.push(getattr(obj, attr))
+
+    def do_STORE_ATTR(self, arg):
+        attr = self.func.co_names[arg]
+        val, obj = self.popn(2)
+        setattr(obj, attr, val)
+
+    def do_DELETE_ATTR(self, arg):
+        attr = self.func.co_names[arg]
+        obj = self.pop()
+        delattr(obj, attr)
+
+    def do_STORE_SUBSCR(self):
+        val, obj, key = self.popn(3)
+        obj[key] = val
+
+    def do_DELETE_SUBSCR(self):
+        obj, key = self.popn(2)
+        del obj[key]
+
     def do_POP_JUMP_IF_TRUE(self, arg):
         if self.pop():
             self.f_lasti = arg
