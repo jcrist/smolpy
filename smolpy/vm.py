@@ -13,6 +13,12 @@ class VM:
         self.stack = None
         self.result = None
 
+    def top(self):
+        return self.stack[-1]
+
+    def topn(self, n):
+        return self.stack[-n:]
+
     def pop(self, n=0):
         return self.stack.pop(-1 - n)
 
@@ -26,33 +32,14 @@ class VM:
             return ret
         return []
 
-    def next_op(self):
+    def next_op(self, _have_argument=dis.HAVE_ARGUMENT):
         op = self.func.co_code[self.f_lasti]
-        self.f_lasti += 1
-        # XXX: this is wrong
-        int_arg = self.func.co_code[self.f_lasti]
-        self.f_lasti += 1
-
+        arg = self.func.co_code[self.f_lasti + 1]
+        self.f_lasti += 2
         op_name = dis.opname[op]
-        if op >= dis.HAVE_ARGUMENT:
-            if op in dis.hasconst:
-                arg = self.func.co_consts[int_arg]
-            elif op in dis.hasname:
-                arg = self.func.co_names[int_arg]
-            elif op in dis.haslocal:
-                arg = self.func.co_varnames[int_arg]
-            elif op in dis.hasjrel:
-                arg = self.f_lasti + int_arg
-            elif op in dis.hasjabs:
-                arg = int_arg
-            else:
-                arg = int_arg
-            arguments = [arg]
-        else:
-            arguments = []
-        return op_name, arguments
+        return (op_name, arg) if op >= _have_argument else (op_name, None)
 
-    def dispatch(self, op_name, args):
+    def dispatch(self, op_name, arg):
         status = None
         try:
             if op_name.startswith("UNARY_"):
@@ -65,7 +52,7 @@ class VM:
                 handler = getattr(self, f"do_{op_name}", None)
                 if handler is None:
                     raise NotImplementedError("bytecode op: %s" % op_name)
-                status = handler(*args)
+                status = handler(arg) if arg is not None else handler()
         except Exception as exc:
             self.result = exc
             status = False
@@ -82,8 +69,8 @@ class VM:
             self.f_lasti = 0
 
             while True:
-                op, args = self.next_op()
-                status = self.dispatch(op, args)
+                op, arg = self.next_op()
+                status = self.dispatch(op, arg)
                 if status is not None:
                     break
 
@@ -162,7 +149,11 @@ class VM:
         a, b = self.popn(2)
         self.push(self.COMPARE_OPS[op](a, b))
 
-    def do_LOAD_FAST(self, name):
+    def do_LOAD_CONST(self, arg):
+        self.push(self.func.co_consts[arg])
+
+    def do_LOAD_FAST(self, arg):
+        name = self.func.co_varnames[arg]
         try:
             val = self.f_locals[name]
         except KeyError:
@@ -171,8 +162,85 @@ class VM:
             )
         self.push(val)
 
-    def do_LOAD_CONST(self, const):
-        self.push(const)
+    def do_STORE_FAST(self, arg):
+        name = self.func.co_varnames[arg]
+        self.f_locals[name] = self.pop()
+
+    def do_DELETE_FAST(self, arg):
+        name = self.func.co_varnames[arg]
+        del self.f_locals[name]
+
+    def do_LOAD_GLOBAL(self, arg):
+        name = self.func.co_names[arg]
+        try:
+            val = self.f_globals[name]
+        except KeyError:
+            raise NameError(f"global name {name} is not defined")
+        self.push(val)
+
+    def do_POP_JUMP_IF_TRUE(self, arg):
+        if self.pop():
+            self.f_lasti = arg
+
+    def do_POP_JUMP_IF_FALSE(self, arg):
+        if not self.pop():
+            self.f_lasti = arg
+
+    def do_JUMP_IF_TRUE_OR_POP(self, arg):
+        if self.top():
+            self.f_lasti = arg
+        else:
+            self.pop()
+
+    def do_JUMP_IF_FALSE_OR_POP(self, arg):
+        if not self.top():
+            self.f_lasti = arg
+        else:
+            self.pop()
+
+    def do_JUMP_ABSOLUTE(self, arg):
+        self.f_lasti = arg
+
+    def do_JUMP_FORWARD(self, arg):
+        self.f_lasti += arg
+
+    def do_POP_TOP(self):
+        self.pop()
+
+    def do_DUP_TOP(self):
+        self.push(self.top())
+
+    def do_DUP_TOP_TWO(self):
+        self.push(*self.peekn(2))
+
+    def do_ROT_TWO(self):
+        a, b = self.popn(2)
+        self.push(b, a)
+
+    def do_ROT_THREE(self):
+        a, b, c = self.popn(3)
+        self.push(c, a, b)
+
+    def do_ROT_FOUR(self):
+        a, b, c, d = self.popn(3)
+        self.push(d, a, b, c)
+
+    def do_GET_ITER(self):
+        self.push(iter(self.pop()))
+
+    def do_FOR_ITER(self, arg):
+        iterator = self.top()
+        try:
+            v = next(iterator)
+            self.push(v)
+        except StopIteration:
+            self.pop()
+            self.f_lasti += arg
+
+    def do_CALL_FUNCTION(self, arg):
+        args = self.popn(arg)
+        func = self.pop()
+        self.push(func(*args))
 
     def do_RETURN_VALUE(self):
         self.result = self.pop()
