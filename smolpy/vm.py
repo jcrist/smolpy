@@ -180,6 +180,8 @@ class VM:
         obj = self.pop()
         self.push(getattr(obj, attr))
 
+    do_LOAD_METHOD = do_LOAD_ATTR
+
     def do_STORE_ATTR(self, arg):
         attr = self.func.co_names[arg]
         val, obj = self.popn(2)
@@ -261,6 +263,8 @@ class VM:
         args = self.popn(arg)
         func = self.pop()
         self.push(func(*args))
+
+    do_CALL_METHOD = do_CALL_FUNCTION
 
     def do_BUILD_LIST(self, arg):
         self.push(self.popn(arg))
