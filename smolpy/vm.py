@@ -32,14 +32,11 @@ class VM:
             return ret
         return []
 
-    def next_op(self, _have_argument=dis.HAVE_ARGUMENT):
+    def advance(self, _has_args=dis.HAVE_ARGUMENT):
         op = self.func.co_code[self.f_lasti]
         arg = self.func.co_code[self.f_lasti + 1]
         self.f_lasti += 2
         op_name = dis.opname[op]
-        return (op_name, arg) if op >= _have_argument else (op_name, None)
-
-    def dispatch(self, op_name, arg):
         status = None
         try:
             if op_name.startswith("UNARY_"):
@@ -52,7 +49,10 @@ class VM:
                 handler = getattr(self, f"do_{op_name}", None)
                 if handler is None:
                     raise NotImplementedError("bytecode op: %s" % op_name)
-                status = handler(arg) if arg is not None else handler()
+                if op > _has_args:
+                    status = handler(arg)
+                else:
+                    status = handler()
         except Exception as exc:
             self.result = exc
             status = False
@@ -68,12 +68,9 @@ class VM:
             self.stack = []
             self.f_lasti = 0
 
-            while True:
-                op, arg = self.next_op()
-                status = self.dispatch(op, arg)
-                if status is not None:
-                    break
-
+            status = None
+            while status is None:
+                status = self.advance()
             if not status:
                 raise self.result
             return self.result
@@ -264,6 +261,52 @@ class VM:
         args = self.popn(arg)
         func = self.pop()
         self.push(func(*args))
+
+    def do_BUILD_LIST(self, arg):
+        self.push(self.popn(arg))
+
+    def do_BUILD_SET(self, arg):
+        self.push(set(self.popn(arg)))
+
+    def do_BUILD_TUPLE(self, arg):
+        self.push(tuple(self.popn(arg)))
+
+    def do_BUILD_MAP(self, arg):
+        out = {}
+        items = iter(self.popn(2 * arg))
+        for key in items:
+            out[key] = next(items)
+        self.push(out)
+
+    def do_BUILD_STRING(self, arg):
+        self.push("".join(self.popn(arg)))
+
+    def do_BUILD_SLICE(self, arg):
+        self.push(slice(*self.popn(arg)))
+
+    def do_BUILD_CONST_KEY_MAP(self, arg):
+        keys = self.pop()
+        values = self.popn(arg)
+        self.push(dict(zip(keys, values)))
+
+    FORMAT_OPS = {
+        0x00: lambda x: x,
+        0x01: str,
+        0x02: repr,
+        0x03: ascii,
+    }
+
+    def do_FORMAT_VALUE(self, args):
+        kind = args & 0x03
+        has_spec = args & 0x04 == 0x04
+        if has_spec:
+            fmt_spec = self.pop()
+        value = self.pop()
+        value = self.FORMAT_OPS[kind](value)
+        if has_spec:
+            self.push(fmt_spec.format(value))
+        else:
+            self.push(str(value))
 
     def do_RETURN_VALUE(self):
         self.result = self.pop()
